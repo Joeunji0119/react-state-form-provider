@@ -1,4 +1,4 @@
-import {useEffect, useState, type FocusEvent, type FormEvent} from 'react';
+import {useEffect, useRef, useState, type FocusEvent, type FormEvent} from 'react';
 import type {
   FormApi,
   TErrorState,
@@ -6,6 +6,7 @@ import type {
   TSetValue,
   TSetValues,
   TTouchedState,
+  TValidatingState,
   TValidationResult,
   TValidatorMap,
   TypeToEventMap
@@ -31,15 +32,15 @@ const isDeepEqual = (a: unknown, b: unknown): boolean => {
   );
 };
 
-const runValidators = <T,>(
+const runValidators = async <T,>(
   name: keyof T,
   value: T[keyof T],
   formData: T,
   validateMap: TValidatorMap<T> | undefined
-): TValidationResult => {
+): Promise<TValidationResult> => {
   const validators = validateMap?.[name] ?? [];
   for (const validator of validators) {
-    const result = validator(value, formData);
+    const result = await validator(value, formData);
     if (result?.hasError) return result;
   }
   return formErrorTempl(false, '');
@@ -64,6 +65,17 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
   const [initValue, setInitValue] = useState<T>(() => structuredClone(defaultValues));
   const [error, setError] = useState<TErrorState<T>>({});
   const [touched, setTouched] = useState<TTouchedState<T>>({});
+  const [isValidating, setIsValidating] = useState<TValidatingState<T>>({});
+
+  // 필드별 generation 토큰 — async validator race protection
+  const generations = useRef<Record<string, number>>({});
+  const bumpGen = (name: keyof T): number => {
+    const k = name as string;
+    const g = (generations.current[k] ?? 0) + 1;
+    generations.current[k] = g;
+    return g;
+  };
+  const isLatest = (name: keyof T, g: number): boolean => generations.current[name as string] === g;
 
   useEffect(() => {
     if (!isDirty) return;
@@ -74,6 +86,11 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
     setFormData(initValue);
     setError({});
     setTouched({});
+    setIsValidating({});
+    // bump all gens so any in-flight validators become stale
+    Object.keys(generations.current).forEach((k) => {
+      generations.current[k] = (generations.current[k] ?? 0) + 1;
+    });
   };
 
   const setErrors = ({name, error: hasError, message = ''}: THandleError<T>) => {
@@ -86,11 +103,57 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
     }));
   };
 
-  const validateAll = (data: T): TErrorState<T> => {
-    const next: TErrorState<T> = {};
-    (Object.keys(data) as (keyof T)[]).forEach((name) => {
-      next[name] = runValidators(name, data[name], data, validateMap);
+  // 단일 필드 비동기 검증 — race-safe하게 error/isValidating 갱신
+  const handleValidate = async (name: keyof T, value: T[keyof T], formData: T) => {
+    const myGen = bumpGen(name);
+    setIsValidating((prev) => ({...prev, [name]: true}));
+    try {
+      const result = await runValidators(name, value, formData, validateMap);
+      if (isLatest(name, myGen)) {
+        setError((prev) => ({...prev, [name]: result}));
+      }
+    } catch (err) {
+      console.error('validator error', err);
+    } finally {
+      if (isLatest(name, myGen)) {
+        setIsValidating((prev) => ({...prev, [name]: false}));
+      }
+    }
+  };
+
+  // 전체 필드 일괄 검증 — submit 시점. 결과 반환 + setError/setIsValidating 직접 갱신.
+  const validateAll = async (data: T): Promise<TErrorState<T>> => {
+    const names = Object.keys(data) as (keyof T)[];
+    const myGens = new Map<keyof T, number>();
+    names.forEach((n) => myGens.set(n, bumpGen(n)));
+
+    setIsValidating((prev) => {
+      const next = {...prev};
+      names.forEach((n) => {
+        next[n] = true;
+      });
+      return next;
     });
+
+    const next: TErrorState<T> = {};
+    try {
+      const results = await Promise.all(
+        names.map(async (n) => [n, await runValidators(n, data[n], data, validateMap)] as const)
+      );
+      results.forEach(([n, r]) => {
+        next[n] = r;
+      });
+    } finally {
+      setIsValidating((prev) => {
+        const acc = {...prev};
+        names.forEach((n) => {
+          if (isLatest(n, myGens.get(n)!)) {
+            acc[n] = false;
+          }
+        });
+        return acc;
+      });
+    }
     return next;
   };
 
@@ -105,7 +168,7 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
         return;
       }
 
-      const allErrors = validateAll(formData);
+      const allErrors = await validateAll(formData);
       setError(allErrors);
       const allTouched = (Object.keys(formData) as (keyof T)[]).reduce<TTouchedState<T>>((acc, k) => {
         acc[k] = true;
@@ -125,18 +188,12 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
     }
   };
 
-  const handleValidate = (name: TSetValue<T>['name'], value: TSetValue<T>['value']) => {
-    const nextFormData = {...formData, [name]: value};
-    const result = runValidators(name, value, nextFormData, validateMap);
-    setError((prev) => ({...prev, [name]: result}));
-  };
-
   const onChange = (e: TypeToEventMap[keyof TypeToEventMap]) => {
     const inputValue = e?.target?.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value;
     const targetName = e.target.name as keyof T;
 
     setFormData((prev) => ({...prev, [targetName]: inputValue}));
-    handleValidate(targetName, inputValue as T[keyof T]);
+    void handleValidate(targetName, inputValue as T[keyof T], {...formData, [targetName]: inputValue});
   };
 
   const onBlur = (e: FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -146,15 +203,16 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
 
   const setValue = ({name, value}: TSetValue<T>) => {
     setFormData((prev) => ({...prev, [name]: value}));
-    handleValidate(name, value);
+    void handleValidate(name, value, {...formData, [name]: value});
   };
 
   const setValues = (values: Partial<TSetValues<T>>) => {
     setFormData((prev) => Object.assign({...prev}, values));
     const keys = Object.keys(values) as (keyof TSetValues<T>)[];
+    const nextFormData = {...formData, ...values} as T;
     keys.forEach((key) => {
       if (values[key] === undefined) return;
-      handleValidate(key, values[key]);
+      void handleValidate(key, values[key] as T[keyof T], nextFormData);
     });
   };
 
@@ -162,6 +220,7 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
     value: formData,
     error,
     touched,
+    isValidating,
     setValue,
     setValues,
     setErrors,

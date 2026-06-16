@@ -14,6 +14,7 @@ export type TSetValue<T> = {name: keyof T; value: T[keyof T]};
 export type TSetValues<T> = Record<keyof T, T[keyof T]>;
 
 export type TTouchedState<T> = {[K in keyof T]?: boolean};
+export type TValidatingState<T> = {[K in keyof T]?: boolean};
 
 export type TFormFocusEvent = React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>;
 
@@ -21,6 +22,7 @@ export type FormRenderProps<T> = {
   value: T;
   error: {[K in keyof T]?: TValidationResult};
   touched: TTouchedState<T>;
+  isValidating: TValidatingState<T>;
   setValue: ({name, value}: TSetValue<T>) => void;
   setValues: (values: Partial<TSetValues<T>>) => void;
   setErrors: ({name, error, message}: THandleError<T>) => void;
@@ -36,7 +38,7 @@ export type FormApi<T> = FormRenderProps<T> & {
 export type Validator<V = unknown, A = Record<string, unknown>> = (
   value: V,
   allValues: A
-) => TValidationResult | null;
+) => TValidationResult | null | Promise<TValidationResult | null>;
 
 export type TValidatorMap<T> = {
   [K in keyof T]?: Validator<T[K], T>[];

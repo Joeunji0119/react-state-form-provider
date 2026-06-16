@@ -13,21 +13,11 @@ export type {
   TSetValue,
   TSetValues,
   TTouchedState,
+  TValidatingState,
   TValidationResult,
   TValidatorMap,
   Validator,
   TypeToEventMap
 } from './form.types';
 
-export {
-  advanceRegexValidators,
-  booleanValidators,
-  formErrorTempl,
-  functionalArrayValidatorPattern,
-  functionalArrayValidators,
-  functionalValidatorPattern,
-  functionalValidators,
-  pickValidate,
-  regexPatterns,
-  regexValidators
-} from './validator';
+export {formErrorTempl, validator} from './validator';
