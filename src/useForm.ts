@@ -1,7 +1,9 @@
-import {useEffect, useRef, useState, type FocusEvent, type FormEvent} from 'react';
+import {useEffect, useMemo, useRef, useState, type FocusEvent} from 'react';
 import type {
   FormApi,
+  TDirtyState,
   TErrorState,
+  TFormSubmitEvent,
   THandleError,
   TSetValue,
   TSetValues,
@@ -46,20 +48,25 @@ const runValidators = async <T,>(
   return formErrorTempl(false, '');
 };
 
-export interface UseFormOptions<T extends Record<string, unknown>> {
+export interface UseFormOptions<T extends Record<string, unknown>, K extends keyof T = never, D extends boolean = false> {
   defaultValues: T;
-  excludeKey?: (keyof T)[];
+  excludeKey?: K[];
   validateMap?: TValidatorMap<T>;
-  isDirty?: (v: boolean) => void;
+  /** true면 변경된(dirty) 폼만 제출. 기본값 false — 변경 없어도 항상 제출. */
+  submitOnlyWhenDirty?: boolean;
+  /** true면 수정된(dirty) 필드만 onSubmit payload에 담는다. 기본 false. */
+  onlyDirtyFields?: D;
   onSubmit: (
-    value: Omit<T, keyof T[]>,
+    value: D extends true ? Partial<Omit<T, K>> : Omit<T, K>,
     handleError: (payload: THandleError<T>) => void,
     onReset: () => void
   ) => Promise<void>;
 }
 
-export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOptions<T>): FormApi<T> => {
-  const {defaultValues, excludeKey = [], onSubmit, isDirty, validateMap} = options;
+export const useForm = <T extends Record<keyof T, unknown>, K extends keyof T = never, D extends boolean = false>(
+  options: UseFormOptions<T, K, D>
+): FormApi<T> => {
+  const {defaultValues, excludeKey = [], onSubmit, submitOnlyWhenDirty, onlyDirtyFields, validateMap} = options;
 
   const [formData, setFormData] = useState<T>(() => structuredClone(defaultValues));
   const [initValue, setInitValue] = useState<T>(() => structuredClone(defaultValues));
@@ -77,10 +84,37 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
   };
   const isLatest = (name: keyof T, g: number): boolean => generations.current[name as string] === g;
 
+  // defaultValues가 (내용 기준으로) 바뀌면 폼을 그 값으로 재초기화한다.
+  // 비동기로 도착하는 초기값(API 응답)을 폼에 싣기 위한 동작.
+  // deep-equal로 비교하므로 인라인 리터럴({...})은 매 렌더 새 객체여도 리셋되지 않는다.
+  const prevDefaults = useRef<T>(defaultValues);
   useEffect(() => {
-    if (!isDirty) return;
-    isDirty(!isDeepEqual(initValue, formData));
-  }, [formData, initValue, isDirty]);
+    if (isDeepEqual(prevDefaults.current, defaultValues)) return;
+    prevDefaults.current = defaultValues;
+
+    const next = structuredClone(defaultValues);
+    setFormData(next);
+    setInitValue(next);
+    setError({});
+    setTouched({});
+    setIsValidating({});
+    // in-flight validator는 모두 stale 처리
+    Object.keys(generations.current).forEach((k) => {
+      generations.current[k] = (generations.current[k] ?? 0) + 1;
+    });
+  }, [defaultValues]);
+
+  // initValue 대비 바뀐 필드만 true. 사용자가 payload를 직접 추려 쓸 때 사용.
+  const dirtyFields = useMemo<TDirtyState<T>>(() => {
+    const next: TDirtyState<T> = {};
+    (Object.keys(formData) as (keyof T)[]).forEach((k) => {
+      if (!isDeepEqual(formData[k], initValue[k])) next[k] = true;
+    });
+    return next;
+  }, [formData, initValue]);
+
+  // 하나라도 바뀌었으면 dirty. dirtyFields와 같은 비교를 단일 소스로 공유.
+  const isDirty = Object.keys(dirtyFields).length > 0;
 
   const onReset = () => {
     setFormData(initValue);
@@ -160,11 +194,10 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
   const hasAnyError = (errors: TErrorState<T>): boolean =>
     (Object.keys(errors) as (keyof T)[]).some((k) => errors[k]?.hasError);
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: TFormSubmitEvent) => {
+    e?.preventDefault();
     try {
-      if (isDirty && isDeepEqual(initValue, formData)) {
-        isDirty(false);
+      if (submitOnlyWhenDirty && !isDirty) {
         return;
       }
 
@@ -178,8 +211,10 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
       if (hasAnyError(allErrors)) return;
 
       const filtered = Object.fromEntries(
-        Object.entries(formData).filter(([k]) => !excludeKey.includes(k as (typeof excludeKey)[number]))
-      ) as Omit<T, keyof T[]>;
+        Object.entries(formData).filter(
+          ([k]) => !excludeKey.includes(k as K) && (!onlyDirtyFields || dirtyFields[k as keyof T])
+        )
+      ) as Omit<T, K>;
 
       await onSubmit(filtered, setErrors, onReset);
       setInitValue(structuredClone(formData));
@@ -221,6 +256,8 @@ export const useForm = <T extends Record<keyof T, unknown>>(options: UseFormOpti
     error,
     touched,
     isValidating,
+    dirtyFields,
+    isDirty,
     setValue,
     setValues,
     setErrors,

@@ -6,6 +6,7 @@ export type {
   FormApi,
   FormRenderProps,
   IFormProvider,
+  TDirtyState,
   TErrorState,
   TFormFocusEvent,
   THandleError,
@@ -20,4 +21,4 @@ export type {
   TypeToEventMap
 } from './form.types';
 
-export {formErrorTempl, validator} from './validator';
+export {formErrorTempl, validator, regex} from './validator';

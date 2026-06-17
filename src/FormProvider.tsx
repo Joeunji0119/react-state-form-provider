@@ -2,10 +2,12 @@ import type {FormApi, IFormProvider} from './form.types';
 import {FormContext} from './FormContext';
 import {useForm} from './useForm';
 
-const FormProvider = <T extends Record<keyof T, unknown>>(props: IFormProvider<T>) => {
-  const {defaultValues, excludeKey, children, onSubmit, isDirty, validateMap} = props;
+const FormProvider = <T extends Record<keyof T, unknown>, K extends keyof T = never, D extends boolean = false>(
+  props: IFormProvider<T, K, D>
+) => {
+  const {defaultValues, excludeKey, children, onSubmit, submitOnlyWhenDirty, onlyDirtyFields, validateMap} = props;
 
-  const api = useForm<T>({defaultValues, excludeKey, onSubmit, isDirty, validateMap});
+  const api = useForm<T, K, D>({defaultValues, excludeKey, onSubmit, submitOnlyWhenDirty, onlyDirtyFields, validateMap});
   const {handleSubmit, ...renderProps} = api;
 
   const rendered = typeof children === 'function' ? children(renderProps) : children;

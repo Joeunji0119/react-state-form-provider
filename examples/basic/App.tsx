@@ -1,4 +1,4 @@
-import {FormProvider, validator, type TValidatorMap} from 'react-state-form-provider';
+import {FormProvider, validator, regex, type TValidatorMap} from 'react-state-form-provider';
 
 // ============================================================
 // 라이브러리는 검증 사상을 가지지 않습니다. 정규식 사전, "빈 값을
@@ -26,9 +26,12 @@ const functionalPatterns = {
   maxLength: (max: number) => (v: string) => v.length <= max
 };
 
-// 3. 사용자 헬퍼 — 정규식을 검증기로 한 줄 래핑
-const regex = (pattern: RegExp, message: string) => validator((v: string) => pattern.test(v), message);
-
+// 3. 검증 메시지 — 한곳에 모아두면 문구 수정/번역이 쉽다
+const messages = {
+  email: '이메일 형식이 올바르지 않습니다',
+  password: '영문/숫자/특수문자 8~16자',
+  maxLength: '16자 이하'
+};
 
 type LoginForm = {
   email: string;
@@ -37,10 +40,10 @@ type LoginForm = {
 };
 
 const validateMap: TValidatorMap<LoginForm> = {
-  email: [regex(regexPatterns.email, '이메일 형식이 올바르지 않습니다')],
+  email: [regex(regexPatterns.email, messages.email)],
   password: [
-    regex(regexPatterns.password, '영문/숫자/특수문자 8~16자'),
-    validator(functionalPatterns.maxLength(16), '16자 이하')
+    regex(regexPatterns.password, messages.password),
+    validator(functionalPatterns.maxLength(16), messages.maxLength)
   ]
 };
 

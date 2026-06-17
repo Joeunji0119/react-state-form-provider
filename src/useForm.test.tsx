@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {act, fireEvent, render, renderHook, screen, waitFor} from '@testing-library/react';
 import FormProvider from './FormProvider';
 import {useForm} from './useForm';
-import {validator, formErrorTempl} from './validator';
+import {validator, regex, formErrorTempl} from './validator';
 import type {TValidatorMap} from './form.types';
 
 type Form = {email: string; password: string};
@@ -53,42 +53,184 @@ describe('useForm — submit gate', () => {
   });
 });
 
-describe('useForm — dirty (deep equal)', () => {
-  it('reports dirty when nested array changes', async () => {
+describe('useForm — isDirty (boolean, deep equal)', () => {
+  it('is true when a nested array changes', async () => {
     type T = {tags: string[]};
-    const isDirty = vi.fn();
     const {result} = renderHook(() =>
-      useForm<T>({
-        defaultValues: {tags: ['a', 'b']},
-        isDirty,
-        onSubmit: async () => {}
-      })
+      useForm<T>({defaultValues: {tags: ['a', 'b']}, onSubmit: async () => {}})
     );
+
+    expect(result.current.isDirty).toBe(false);
 
     await act(async () => {
       result.current.setValue({name: 'tags', value: ['a', 'b', 'c']});
     });
 
-    expect(isDirty).toHaveBeenCalledWith(true);
+    expect(result.current.isDirty).toBe(true);
   });
 
-  it('reports not dirty when array re-set to deep-equal value', async () => {
+  it('is false when an array is re-set to a deep-equal value', async () => {
     type T = {tags: string[]};
-    const isDirty = vi.fn();
     const {result} = renderHook(() =>
-      useForm<T>({
-        defaultValues: {tags: ['a', 'b']},
-        isDirty,
-        onSubmit: async () => {}
-      })
+      useForm<T>({defaultValues: {tags: ['a', 'b']}, onSubmit: async () => {}})
     );
 
     await act(async () => {
       result.current.setValue({name: 'tags', value: ['a', 'b']});
     });
 
-    const lastCall = isDirty.mock.calls.at(-1);
-    expect(lastCall?.[0]).toBe(false);
+    expect(result.current.isDirty).toBe(false);
+  });
+});
+
+describe('useForm — dirtyFields', () => {
+  type T = {email: string; password: string};
+  const defaults = {email: 'a@b.com', password: 'x'};
+
+  it('marks only changed fields and omits unchanged ones', async () => {
+    const {result} = renderHook(() => useForm<T>({defaultValues: defaults, onSubmit: async () => {}}));
+
+    expect(result.current.dirtyFields).toEqual({});
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'z@b.com'});
+    });
+
+    expect(result.current.dirtyFields).toEqual({email: true});
+    expect(result.current.dirtyFields.password).toBeUndefined();
+  });
+
+  it('clears a field when it is set back to its initial value (deep equal)', async () => {
+    const {result} = renderHook(() => useForm<T>({defaultValues: defaults, onSubmit: async () => {}}));
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'z@b.com'});
+    });
+    expect(result.current.dirtyFields).toEqual({email: true});
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'a@b.com'});
+    });
+    expect(result.current.dirtyFields).toEqual({});
+  });
+
+  it('resets on onReset', async () => {
+    const {result} = renderHook(() => useForm<T>({defaultValues: defaults, onSubmit: async () => {}}));
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'z@b.com'});
+    });
+    expect(result.current.dirtyFields).toEqual({email: true});
+
+    await act(async () => {
+      result.current.onReset();
+    });
+    expect(result.current.dirtyFields).toEqual({});
+  });
+
+  // README의 "바뀐 것만 제출(PATCH)" 패턴이 실제로 동작하는지 잠금.
+  it('lets a consumer filter the submit payload down to changed keys', async () => {
+    const received: Record<string, unknown>[] = [];
+    const {result} = renderHook(() =>
+      useForm<T>({
+        defaultValues: defaults,
+        onSubmit: async (data) => {
+          const changed = Object.fromEntries(
+            Object.entries(data).filter(([k]) => result.current.dirtyFields[k as keyof T])
+          );
+          received.push(changed);
+        }
+      })
+    );
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'z@b.com'});
+    });
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(received).toEqual([{email: 'z@b.com'}]);
+  });
+});
+
+describe('useForm — submitOnlyWhenDirty gate', () => {
+  type T = {email: string; password: string};
+  const defaults = {email: 'a@b.com', password: 'x'};
+
+  it('submits an unchanged form when submitOnlyWhenDirty is not set (default)', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() => useForm<T>({defaultValues: defaults, onSubmit}));
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it('blocks an unchanged form when submitOnlyWhenDirty is true', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() =>
+      useForm<T>({defaultValues: defaults, submitOnlyWhenDirty: true, onSubmit})
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('submits a changed form when submitOnlyWhenDirty is true', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() =>
+      useForm<T>({defaultValues: defaults, submitOnlyWhenDirty: true, onSubmit})
+    );
+
+    await act(async () => {
+      result.current.setValue({name: 'password', value: 'changed'});
+    });
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+});
+
+describe('useForm — onlyDirtyFields payload', () => {
+  type T = {email: string; password: string};
+  const defaults = {email: 'a@b.com', password: 'x'};
+
+  it('submits only the changed fields when onlyDirtyFields is true', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() =>
+      useForm<T, never, true>({defaultValues: defaults, onlyDirtyFields: true, onSubmit})
+    );
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'z@b.com'});
+    });
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(onSubmit.mock.calls[0][0]).toEqual({email: 'z@b.com'});
+  });
+
+  it('submits the full form when onlyDirtyFields is omitted (default)', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() => useForm<T>({defaultValues: defaults, onSubmit}));
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'z@b.com'});
+    });
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(onSubmit.mock.calls[0][0]).toEqual({email: 'z@b.com', password: 'x'});
   });
 });
 
@@ -263,5 +405,244 @@ describe('useForm — async validators', () => {
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe('useForm — excludeKey', () => {
+  it('strips excluded keys from the object passed to onSubmit', async () => {
+    type T = {email: string; password: string; _internal: string};
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() =>
+      useForm<T, '_internal'>({
+        defaultValues: {email: 'a@b.com', password: 'pw', _internal: 'secret'},
+        excludeKey: ['_internal'],
+        onSubmit
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(onSubmit).toHaveBeenCalledOnce();
+    const submitted = onSubmit.mock.calls[0][0];
+    expect(submitted).toEqual({email: 'a@b.com', password: 'pw'});
+    expect('_internal' in submitted).toBe(false);
+    // 타입 레벨에서도 _internal이 빠졌는지 — 컴파일되면 통과
+    onSubmit.mockImplementation(async (data: Omit<T, '_internal'>) => {
+      // @ts-expect-error _internal은 Omit으로 제거되어 접근 불가
+      void data._internal;
+    });
+  });
+});
+
+describe('useForm — setValues', () => {
+  it('updates multiple fields at once', async () => {
+    type T = {a: string; b: string};
+    const {result} = renderHook(() =>
+      useForm<T>({defaultValues: {a: '', b: ''}, onSubmit: async () => {}})
+    );
+
+    await act(async () => {
+      result.current.setValues({a: '1', b: '2'});
+    });
+
+    expect(result.current.value).toEqual({a: '1', b: '2'});
+  });
+
+  it('runs validators for each changed field', async () => {
+    type T = {a: string; b: string};
+    const map: TValidatorMap<T> = {
+      a: [validator((v: string) => v.length > 0, 'a required')],
+      b: [validator((v: string) => v.length > 0, 'b required')]
+    };
+    const {result} = renderHook(() =>
+      useForm<T>({defaultValues: {a: 'x', b: 'y'}, validateMap: map, onSubmit: async () => {}})
+    );
+
+    await act(async () => {
+      result.current.setValues({a: '', b: ''});
+    });
+
+    await waitFor(() => {
+      expect(result.current.error.a?.hasError).toBe(true);
+      expect(result.current.error.b?.hasError).toBe(true);
+    });
+  });
+});
+
+describe('useForm — onSubmit callbacks', () => {
+  it('handleError sets a server-side field error', async () => {
+    type T = {email: string};
+    const {result} = renderHook(() =>
+      useForm<T>({
+        defaultValues: {email: 'a@b.com'},
+        onSubmit: async (_data, handleError) => {
+          handleError({name: 'email', error: true, message: 'already taken'});
+        }
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(result.current.error.email?.hasError).toBe(true);
+    expect(result.current.error.email?.message).toBe('already taken');
+  });
+
+  it('onReset callback restores values after submit', async () => {
+    type T = {name: string};
+    const {result} = renderHook(() =>
+      useForm<T>({
+        defaultValues: {name: 'init'},
+        onSubmit: async (_data, _handleError, onReset) => {
+          onReset();
+        }
+      })
+    );
+
+    await act(async () => {
+      result.current.setValue({name: 'name', value: 'changed'});
+    });
+    expect(result.current.value.name).toBe('changed');
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(result.current.value.name).toBe('init');
+  });
+});
+
+describe('useForm — onChange checkbox', () => {
+  it('uses checked (boolean) for checkbox inputs', async () => {
+    type T = {agree: boolean};
+    const {result} = renderHook(() =>
+      useForm<T>({defaultValues: {agree: false}, onSubmit: async () => {}})
+    );
+
+    const evt = {
+      target: {name: 'agree', type: 'checkbox', checked: true}
+    } as unknown as React.ChangeEvent<HTMLInputElement>;
+    await act(async () => {
+      result.current.onChange(evt);
+    });
+
+    expect(result.current.value.agree).toBe(true);
+  });
+});
+
+describe('useForm — submitOnlyWhenDirty', () => {
+  it('submits a pristine form by default', async () => {
+    type T = {name: string};
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() =>
+      useForm<T>({defaultValues: {name: 'x'}, onSubmit})
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it('blocks a pristine submit but allows it after a change', async () => {
+    type T = {name: string};
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const {result} = renderHook(() =>
+      useForm<T>({defaultValues: {name: 'x'}, submitOnlyWhenDirty: true, onSubmit})
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await act(async () => {
+      result.current.setValue({name: 'name', value: 'y'});
+    });
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+});
+
+describe('useForm — reactive defaultValues', () => {
+  type T = {email: string; password: string};
+
+  it('re-initializes the form when defaultValues content changes (async initial data)', async () => {
+    const {result, rerender} = renderHook(
+      ({defaults}: {defaults: T}) => useForm<T>({defaultValues: defaults, onSubmit: async () => {}}),
+      {initialProps: {defaults: {email: '', password: ''}}}
+    );
+
+    expect(result.current.value).toEqual({email: '', password: ''});
+
+    // 비동기로 도착한 초기값으로 prop 교체
+    await act(async () => {
+      rerender({defaults: {email: 'loaded@a.com', password: 'pw'}});
+    });
+
+    expect(result.current.value).toEqual({email: 'loaded@a.com', password: 'pw'});
+    // 새 값이 기준선이 되므로 dirty 아님
+    expect(result.current.isDirty).toBe(false);
+    expect(result.current.dirtyFields).toEqual({});
+  });
+
+  it('does not reset on a new-but-deep-equal defaultValues object (inline literal safe)', async () => {
+    const {result, rerender} = renderHook(
+      ({defaults}: {defaults: T}) => useForm<T>({defaultValues: defaults, onSubmit: async () => {}}),
+      {initialProps: {defaults: {email: 'a@b.com', password: 'x'}}}
+    );
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'edited@b.com'});
+    });
+    expect(result.current.value.email).toBe('edited@b.com');
+
+    // 내용은 같지만 새 객체 (매 렌더 인라인 리터럴 상황)
+    await act(async () => {
+      rerender({defaults: {email: 'a@b.com', password: 'x'}});
+    });
+
+    // 사용자가 편집한 값이 유지돼야 한다
+    expect(result.current.value.email).toBe('edited@b.com');
+  });
+
+  it('clears error/touched on re-initialization', async () => {
+    const {result, rerender} = renderHook(
+      ({defaults}: {defaults: T}) =>
+        useForm<T>({defaultValues: defaults, validateMap, onSubmit: async () => {}}),
+      {initialProps: {defaults: {email: 'bad', password: ''}}}
+    );
+
+    await act(async () => {
+      result.current.setValue({name: 'email', value: 'still-bad'});
+    });
+    const blurEvt = {target: {name: 'email'}} as unknown as React.FocusEvent<HTMLInputElement>;
+    act(() => {
+      result.current.onBlur(blurEvt);
+    });
+    expect(result.current.error.email?.hasError).toBe(true);
+    expect(result.current.touched.email).toBe(true);
+
+    await act(async () => {
+      rerender({defaults: {email: 'fresh@a.com', password: 'pw'}});
+    });
+
+    expect(result.current.value.email).toBe('fresh@a.com');
+    expect(result.current.error.email).toBeUndefined();
+    expect(result.current.touched.email).toBeUndefined();
+  });
+});
+
+describe('validator — regex helper', () => {
+  it('passes matching values and fails non-matching', async () => {
+    const v = regex(/^\d+$/, 'digits only');
+    expect(await v('123', {})).toEqual(formErrorTempl(false, ''));
+    expect(await v('12a', {})).toEqual(formErrorTempl(true, 'digits only'));
   });
 });

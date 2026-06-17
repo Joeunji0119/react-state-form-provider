@@ -1,47 +1,88 @@
 # react-state-form-provider
 
-상태(state) 기반의 React form 라이브러리. ref 없음, `register()` 패턴 없음, 외부 스키마 라이브러리 결합 없음.
+A state-based React form library. No refs, no `register()` pattern, no coupling to external schema libraries.
 
-## 왜 만들었나?
+> 한국어 문서는 [README.ko.md](README.ko.md)를 참고하세요.
 
-[react-hook-form](https://react-hook-form.com/)이 싫어서 만들었다.
+## Why build this?
 
-**React인데 왜 ref?** UI와 데이터가 일치하는 게 React의 최대 강점이다. ref로 DOM에서 값을 직접 끌어오면 그 일치를 깬다. 성능 때문에 ref가 불가피한 경우가 있다는 건 안다 — 다만 **간단한 폼** 하나 만들겠다고 ref 기반 라이브러리를 끌어오는 게 마음에 안 들었다.
+I built it because I dislike [react-hook-form](https://react-hook-form.com/).
 
-이 외에도 거슬렸던 것들:
+**It's React — so why refs?** Keeping the UI and the data in sync is React's greatest strength. Pulling values straight out of the DOM via refs breaks that sync. I know there are cases where refs are unavoidable for performance — I just didn't like reaching for a ref-based library every time I needed to build **one simple form**.
 
-- **`register()` 패턴.** input에 마법 prop 묶음을 spread하는 방식은 무엇이 wiring돼 있는지 가린다. JSX가 명시적인 건 단점이 아니라 의도다.
-- **zod / yup 같은 외부 schema 라이브러리와의 결합.** zod 자체가 나쁘다는 건 아니다 — 좋은 도구다. 다만 react-hook-form이 `resolver: zodResolver(schema)` 처럼 **"zod schema 여기 넣으세요"라는 전용 입구를 API에 만들어두는 방식**이 마음에 안 들었다. 그렇게 두면 라이브러리가 schema 라이브러리에 묶이고, 라이브러리를 쓰는 사람도 묶인다. 이 라이브러리는 zod를 모른다 — 검증은 그냥 함수다. zod 쓰고 싶으면 validator 함수 안에서 직접 호출하면 된다 ([아래 예시](#zod-쓰고-싶다면)).
-- **Context로 prop drilling 우회하는 관행.** 자식 컴포넌트엔 prop으로 명시적으로 넘기는 게 맞다고 본다. 이 라이브러리도 `useFormContext`를 제공하지만 권장하지 않는다 ([아래](#2-깊은-자식--prop-전달-권장) 참고).
+Other things that bugged me:
 
-> **솔직히, form 같은 건 라이브러리에 의존하기보단 직접 구현하는 게 맞다고 생각한다.** 라이브러리를 만들어 놓고 이런 말 하는 게 이상하긴 하다. 다만 이 라이브러리는 "react-hook-form 대신 이걸 써라"가 아니라 "내가 폼을 다루는 방식의 정리"에 가깝다. form 로직은 앱마다 미묘하게 다르니, 본인이 통제할 수 있는 게 결국 가장 낫다.
+- **The `register()` pattern.** Spreading a bundle of magic props onto an input hides what's actually wired up. JSX being explicit isn't a downside — it's the point.
+- **Coupling to external schema libraries like zod / yup.** zod itself isn't bad — it's a good tool. What I disliked was react-hook-form building **a dedicated "drop your zod schema here" entry point into its API**, like `resolver: zodResolver(schema)`. Do that and the library gets tied to a schema library, and so does everyone using it. This library doesn't know about zod — validation is just functions. If you want zod, call it yourself inside a validator function ([example below](#if-you-want-zod)).
+- **The habit of using Context to dodge prop drilling.** I think child components should be passed values explicitly via props. This library does provide `useFormContext`, but it isn't recommended ([see below](#2-deep-children--prefer-passing-props)).
 
-## 설치
+> **Honestly, I think forms are something you're better off implementing yourself rather than depending on a library.** It's a bit odd to say that after building a library. But this library isn't "use this instead of react-hook-form" — it's closer to "a write-up of how I deal with forms." Form logic differs subtly from app to app, so what you can control yourself is ultimately the best option.
+
+## Install
 
 ```bash
 npm install react-state-form-provider
 ```
 
-`react`와 `react-dom` (>=18)은 peer dependency입니다.
+`react` and `react-dom` (>=18) are peer dependencies.
 
-## 사용 패턴
+## When validation runs and errors show (the default flow)
 
-권장 패턴은 두 가지 — **render-prop** 또는 **`useForm` 단독 훅**. Context (`useFormContext`) API도 제공하지만 권장하지 않는다 ([아래](#2-깊은-자식--prop-전달-권장) 참고).
+The recommended composition is **validate early, complain late**:
+
+```text
+typing ("a", "a@", "a@b")  → onChange validates each time → error updates, but touched=false → screen stays quiet
+field loses focus (blur)    → touched=true → the error now shows if still invalid
+fixing it afterward         → onChange keeps the error live (updates / clears)
+submit                      → every field forced touched + fully validated → remaining errors surface at once
+```
+
+- **Validation = `onChange`** (every change, async included).
+- **Display gate = `touched`** — flipped by `onBlur`, forced on all fields at submit.
+- So errors render as `touched.x && error.x?.hasError`.
+
+**This is a convention, not a lock.** `value` / `error` / `touched` are primitives you wire yourself — change the gate and the UX changes:
+
+- show errors immediately → drop the gate: `error.x?.hasError`
+- show only after submit → gate on your own `submitted` flag instead of `touched`
+
+More on the gate in the **`touched`** section below.
+
+## Usage patterns
+
+There are two recommended patterns — the **render-prop** or the **standalone `useForm` hook**. A Context API (`useFormContext`) is also provided but not recommended ([see below](#2-deep-children--prefer-passing-props)).
+
+> **The wiring key is the `name` attribute.** An input's `name` (`<input name="email">`) is the single key that links `value.email`, `validateMap.email`, `error.email`, and `touched.email`. `onChange` reads `e.target.name` to know which field changed, so the **`name` must match a key of your form type `T`** for updates and validation to run. There's no `register()` to bundle it for you — matching the `name` yourself is this library's wiring contract.
 
 ### 1. `<FormProvider>` + render-prop
 
 ```tsx
-import {FormProvider, regexValidators, type TValidatorMap} from 'react-state-form-provider';
+import {FormProvider, regex, type TValidatorMap} from 'react-state-form-provider';
 
 type LoginForm = {email: string; password: string};
 
+// The regex dictionary is up to you — the library only provides the `regex` wrapper.
+const patterns = {
+  email: /^[\w.-]+@[\w.-]+\.\w+$/,
+  password: /^(?=.*[A-Za-z])(?=.*[0-9])(?=.*[!@#$%^&*()_+=?~-])[A-Za-z0-9!@#$%^&*()_+=?~-]{8,16}$/
+};
+
+// Collecting messages in one place makes editing/translating easy
+const messages = {
+  email: 'Invalid email format',
+  password: '8–16 chars with letters, numbers, and symbols'
+};
+
+// Keep this form's initial values and validators side by side — its whole definition in one spot
+const defaultValues: LoginForm = {email: '', password: ''};
+
 const validateMap: TValidatorMap<LoginForm> = {
-  email: [regexValidators('email', '이메일 형식이 올바르지 않습니다')],
-  password: [regexValidators('password', '영문/숫자/특수문자 8~16자')]
+  email: [regex(patterns.email, messages.email)],
+  password: [regex(patterns.password, messages.password)]
 };
 
 <FormProvider<LoginForm>
-  defaultValues={{email: '', password: ''}}
+  defaultValues={defaultValues}
   validateMap={validateMap}
   onSubmit={async (data) => {
     await fetch('/login', {method: 'POST', body: JSON.stringify(data)});
@@ -61,15 +102,15 @@ const validateMap: TValidatorMap<LoginForm> = {
       />
       {touched.password && error.password?.hasError && <p>{error.password.message}</p>}
 
-      <button type="submit">제출</button>
+      <button type="submit">Submit</button>
     </>
   )}
 </FormProvider>
 ```
 
-### 2. 깊은 자식 — prop 전달 권장
+### 2. Deep children — prefer passing props
 
-자식 컴포넌트에는 `useFormContext`로 form state를 끌어오기보다, **render-prop에서 받은 값을 prop으로 직접 넘기는 쪽**을 권장한다.
+For child components, rather than pulling form state in via `useFormContext`, **prefer passing the values you received from the render-prop down as props**.
 
 ```tsx
 <FormProvider<LoginForm>
@@ -96,15 +137,15 @@ const validateMap: TValidatorMap<LoginForm> = {
 </FormProvider>
 ```
 
-이유:
-- **테스트하기 쉽다.** prop만 받는 컴포넌트는 단독 mount 가능. `useFormContext`를 쓰는 컴포넌트는 매번 `<FormProvider>`로 감싸야 한다.
-- **타입이 자동 추론된다.** `useFormContext<T>()`는 호출 측에서 매번 제네릭을 박아야 하고, Context 내부는 `unknown`이라 사실상 unsafe cast이다.
-- **재사용 가능하다.** `<EmailField />`는 form 바깥에서도 쓸 수 있다. context 의존 컴포넌트는 form에 종속된다.
-- **성능 이득이 없다.** render-prop 구조라 form state가 바뀌면 children 전체가 어차피 리렌더된다. Context로 prop drilling을 피해도 리렌더 회피 효과가 없다 — **단지 데이터 흐름만 가리는 셈**.
+Why:
+- **Easier to test.** A component that only takes props can be mounted on its own. A component using `useFormContext` has to be wrapped in `<FormProvider>` every time.
+- **Types are inferred automatically.** `useFormContext<T>()` forces you to plug in the generic at every call site, and internally the Context is `unknown`, so it's effectively an unsafe cast.
+- **Reusable.** `<EmailField />` can be used outside the form too. A context-dependent component is bound to the form.
+- **No performance gain.** Because of the render-prop structure, when form state changes the entire children re-render anyway. Avoiding prop drilling with Context buys you nothing in re-render avoidance — **it just hides the data flow**.
 
-#### 굳이 Context를 써야 한다면 (비권장)
+#### If you really must use Context (not recommended)
 
-깊은 트리에서 한두 군데만 form 값이 필요한 예외적 케이스를 위해 `useFormContext`는 남겨뒀다. 다만 위의 단점들이 모두 따라온다.
+`useFormContext` is left in for the exceptional case where only one or two spots deep in the tree need a form value. But all of the downsides above come with it.
 
 ```tsx
 <FormProvider<LoginForm> defaultValues={{email: '', password: ''}} onSubmit={handle}>
@@ -117,100 +158,189 @@ const DeepChild = () => {
 };
 ```
 
-### 3. `useForm` 단독 (`<form>` 태그 없이)
+### 3. `useForm` standalone — own all the markup yourself
+
+`<FormProvider>` is a thin wrapper: it calls `useForm` and renders `<form onSubmit={handleSubmit} noValidate>` plus a Context Provider for you. **`useForm` is the actual core — all the state, validation, and `handleSubmit` logic lives in the hook.** So `useForm` is not something you reach for "instead of" `FormProvider`; it's the layer underneath it. Call it directly when you don't want the Context Provider and you'd rather own every tag yourself.
+
+`handleSubmit` only ever uses the event for one thing — `e?.preventDefault()` — and the event is **optional**. That gives you two ways to wire submission, and you pick whichever fits your markup.
+
+#### 3a. With your own `<form>` tag
+
+You render the `<form>` (with whatever `className` / `id` / `aria-*` you want) and wire `handleSubmit` to its `onSubmit`. Enter-to-submit and `type="submit"` work exactly like native HTML.
 
 ```tsx
-const {value, onChange, onBlur, handleSubmit, error, touched, onReset} = useForm({
-  defaultValues: {email: '', password: ''},
-  validateMap,
-  onSubmit: async (data) => {
-    /* ... */
-  }
-});
+import {useForm, regex, type TValidatorMap} from 'react-state-form-provider';
+
+type LoginForm = {email: string; password: string};
+
+const validateMap: TValidatorMap<LoginForm> = {
+  email: [regex(/^[\w.-]+@[\w.-]+\.\w+$/, 'Invalid email format')]
+};
+
+const LoginPage = () => {
+  const {value, onChange, onBlur, handleSubmit, error, touched, onReset} = useForm<LoginForm>({
+    defaultValues: {email: '', password: ''},
+    validateMap,
+    onSubmit: async (data) => {
+      await fetch('/login', {method: 'POST', body: JSON.stringify(data)});
+    }
+  });
+
+  return (
+    <form onSubmit={handleSubmit} noValidate className="login-form">
+      <input name="email" value={value.email} onChange={onChange} onBlur={onBlur} />
+      {touched.email && error.email?.hasError && <p>{error.email.message}</p>}
+
+      <button type="submit">Submit</button>
+      <button type="button" onClick={onReset}>
+        Reset
+      </button>
+    </form>
+  );
+};
 ```
 
-## 검증기 (Validator)
+#### 3b. Without any `<form>` tag
 
-검증기는 일반 함수입니다: `(value, allValues) => {hasError, message} | null | Promise<{hasError, message} | null>`.
-실패는 `{hasError: true, message}`를 반환하고, 통과는 `{hasError: false, message: ''}` 또는 `null`을 반환합니다.
+No `<form>` at all. Wire `handleSubmit` straight to a button's `onClick`, or call `handleSubmit()` programmatically with no event. Because the event is optional and only used for `preventDefault()`, both are fully typed — no casts.
 
-**라이브러리는 검증 사상을 가지지 않습니다.** 정규식 사전, 한국형 패턴, "빈 문자열은 통과로 본다" 같은 정책 — 전부 사용자가 자기 코드에서 결정합니다. 라이브러리가 주는 건 두 가지뿐:
+```tsx
+const SearchPanel = () => {
+  const {value, onChange, handleSubmit, error, touched} = useForm<{query: string}>({
+    defaultValues: {query: ''},
+    validateMap: {query: [validator((v) => v.trim().length > 0, 'Enter a search term')]},
+    onSubmit: async (data) => {
+      await runSearch(data.query);
+    }
+  });
+
+  // No <form>. Just a <div> and a button.
+  return (
+    <div className="search-panel">
+      <input name="query" value={value.query} onChange={onChange} />
+      {touched.query && error.query?.hasError && <span>{error.query.message}</span>}
+
+      {/* pass the click event… */}
+      <button type="button" onClick={handleSubmit}>
+        Search
+      </button>
+
+      {/* …or call with no event at all */}
+      <button type="button" onClick={() => handleSubmit()}>
+        Search now
+      </button>
+    </div>
+  );
+};
+```
+
+> `handleSubmit` still runs the full pipeline either way — `preventDefault()` (if an event is passed) → run every validator (awaiting async ones) → mark all fields touched → call `onSubmit` only if there are no errors. The `<form>` tag is just one possible trigger, not a requirement.
+
+## Validators
+
+A validator is a plain function: `(value, allValues) => {hasError, message} | null | Promise<{hasError, message} | null>`.
+On failure it returns `{hasError: true, message}`; on pass it returns `{hasError: false, message: ''}` or `null`.
+
+**The library holds no opinion on validation.** *Policies* like which regex dictionary to use, locale-specific patterns, or "treat an empty string as a pass" are all decided by you in your own code. All the library gives you is three *tools*:
 
 ```ts
 import {
-  validator,        // predicate를 검증기로 래핑 (sync/async 둘 다)
-  formErrorTempl    // {hasError, message} 빌더 — 메시지가 동적일 때 직접 구성용
+  validator,        // wraps a predicate into a validator (both sync and async)
+  regex,            // one-line regex wrapper — shorthand for validator(v => re.test(v), msg)
+  formErrorTempl    // {hasError, message} builder — for composing by hand when the message is dynamic
 } from 'react-state-form-provider';
 ```
 
-> 정규식 한 줄 래퍼, "빈 문자열 통과" 같은 정책 헬퍼는 라이브러리가 안 줍니다 — 사용자가 자기 프로젝트에 짧게 정의해서 쓰면 됩니다 ([examples/basic/App.tsx](examples/basic/App.tsx)에 실제 예시).
+> Which regex to use (the pattern dictionary) and policies like "pass on empty string" are not given by the library — you define them in your own project ([see the real example in examples/basic/App.tsx](examples/basic/App.tsx)).
 
-### 기본 사용
+### Basic usage
 
 ```ts
-import {validator, type TValidatorMap} from 'react-state-form-provider';
+import {validator, regex, type TValidatorMap} from 'react-state-form-provider';
 
-// 1. 사용자 정의: 자기 프로젝트의 정규식 사전
+// Your own definition: the regex dictionary for your project (which patterns to use is up to you)
 const regexPatterns = {
   email: /^[\w.-]+@[\w.-]+\.\w+$/,
   password: /^(?=.*[A-Za-z])(?=.*[0-9])(?=.*[!@#$%^&*()_+=?~-])[A-Za-z0-9!@#$%^&*()_+=?~-]{8,16}$/
 };
 
-// 2. 사용자 정의: 정규식 한 줄 래퍼 (선택)
-const regex = (pattern: RegExp, message: string) =>
-  validator((v: string) => pattern.test(v), message);
+// Collecting messages in one place makes editing/translating easy
+const messages = {
+  email: 'Invalid email format',
+  password: '8–16 chars with letters, numbers, and symbols',
+  maxLength: '16 chars or fewer',
+  passwordConfirm: 'Passwords do not match',
+  agree: 'You must agree to the terms'
+};
 
 type SignUp = {email: string; password: string; passwordConfirm: string; agree: boolean};
 
 const validateMap: TValidatorMap<SignUp> = {
-  // 정규식 검증 — 위에서 정의한 사용자 헬퍼로 한 줄
-  email: [regex(regexPatterns.email, '이메일 형식 오류')],
+  // Regex validation — one line with the library's regex wrapper
+  email: [regex(regexPatterns.email, messages.email)],
 
-  // 정규식 + 추가 함수 검증을 동시에 — 배열에 여러 개 넣기
+  // Regex + an extra function validator at once — put several in the array
   password: [
-    regex(regexPatterns.password, '영문/숫자/특수문자 8~16자'),
-    validator((v: string) => v.length <= 16, '16자 이하')
+    regex(regexPatterns.password, messages.password),
+    validator((v: string) => v.length <= 16, messages.maxLength)
   ],
 
-  // 다른 필드 참조하는 함수형 검증
+  // Functional validation that references another field
   passwordConfirm: [
-    validator((v: string, all: SignUp) => v === all.password, '비밀번호 불일치')
+    validator((v: string, all: SignUp) => v === all.password, messages.passwordConfirm)
   ],
 
-  // boolean 검증 (체크박스)
-  agree: [validator((v: boolean) => v === true, '약관에 동의해야 합니다')]
+  // Boolean validation (checkbox)
+  agree: [validator((v: boolean) => v === true, messages.agree)]
 };
 ```
 
-### 동적 메시지가 필요한 경우 — `formErrorTempl` 직접 사용
+> **Cross-field validators only re-run for the field being edited.** `onChange` validates the field you just typed in, not the fields that depend on it. So editing `password` does **not** re-check `passwordConfirm` live — that stale state is caught on submit (`handleSubmit` validates every field), but not before. If you need dependent fields to re-validate live, call `setValue` on them from your own handler.
+
+### What makes `validateMap` worth it — one per form
+
+Keep one `validateMap` per form. The payoff from that structure is bigger than it looks.
+
+- **You see everything on a field in one line.** `password: [regex(...), validator(...)]` — one regex check, one length check, done. No digging through the component's JSX to find where validation lives.
+- **Messages, regexes, and validator functions live in their own collections, pulled in by key.** Park your copy in `messages` and your patterns in `regexPatterns`, and you can review and translate all of a product's copy in one file and eyeball every regex in one place. `validateMap` just assembles them by key.
+- **No duplication.** One email regex is shared across forms — not copy-pasted, but the same `patterns.email` referenced everywhere.
+- **One place to change.** Want to change a field's validation? Edit that one key in the form's `validateMap`. The JSX never gets touched.
+
+It's an opinionated shape, but honestly this is the part of the library I most want to push.
+
+### When the message needs to be dynamic — use `formErrorTempl` directly
+
+First, about priority. Validators run in the **order you put them in the array**, and the first error wins — that order *is* the priority. So to express "required first, then max length," you don't stack `if`s inside one function; you just list them in order in the array.
+
+Use `validator(predicate, message)` when the message is a fixed string. Reach for `formErrorTempl` directly only when the **message text itself depends on the value**.
 
 ```ts
-import {formErrorTempl} from 'react-state-form-provider';
+import {validator, formErrorTempl, type TValidatorMap} from 'react-state-form-provider';
 
-const validateMap = {
+const validateMap: TValidatorMap<{name: string}> = {
   name: [
-    (v: string) => {
-      if (v.length === 0) return formErrorTempl(true, '필수 입력');
-      if (v.length > 100) return formErrorTempl(true, `${v.length}자 — 100자 이하로`);
-      return null;
-    }
+    // priority = array order; an empty value is caught here first
+    validator((v) => v.trim().length > 0, 'Required'),
+
+    // the message embeds the input length, so build it with formErrorTempl
+    (v) => (v.length > 100 ? formErrorTempl(true, `${v.length} chars — keep it to 100 or fewer`) : null)
   ]
 };
 ```
 
-### 스키마 어댑터는 없음
+### No schema adapter
 
-zod / yup 같은 외부 schema 라이브러리와의 결합은 의도적으로 안 만듭니다 ([설계 철학](#왜-만들었나) 참고). 정 zod 쓰고 싶으면 [아래](#zod-쓰고-싶다면) 방식으로.
+Coupling to external schema libraries like zod / yup is deliberately not built ([see design philosophy](#why-build-this)). If you really want zod, do it the [way below](#if-you-want-zod).
 
-### zod 쓰고 싶다면
+### If you want zod
 
-라이브러리가 zod 어댑터를 제공하지는 않지만, zod 사용 자체를 막는 건 아닙니다. validator 함수 안에서 직접 호출하면 됩니다.
+The library doesn't provide a zod adapter, but it doesn't stop you from using zod either. Just call it yourself inside a validator function.
 
 ```ts
 import {z} from 'zod';
 import {formErrorTempl, type TValidatorMap} from 'react-state-form-provider';
 
-// 사용자 코드의 헬퍼 — 라이브러리가 제공하는 게 아닙니다
+// A helper in your own code — not something the library provides
 const fromZod =
   (schema: z.ZodTypeAny) =>
   (value: unknown) => {
@@ -221,18 +351,18 @@ const fromZod =
 type LoginForm = {email: string; password: string};
 
 const validateMap: TValidatorMap<LoginForm> = {
-  email: [fromZod(z.string().email('이메일 형식 오류'))],
-  password: [fromZod(z.string().min(8, '8자 이상').max(16, '16자 이하'))]
+  email: [fromZod(z.string().email('Invalid email format'))],
+  password: [fromZod(z.string().min(8, 'At least 8 chars').max(16, '16 chars or fewer'))]
 };
 ```
 
-이 `fromZod` 헬퍼는 사용자 코드에 두는 거지 라이브러리가 제공하지 않습니다. zod를 쓸지 말지, 어떻게 쓸지는 사용자가 결정합니다. 라이브러리는 그냥 함수를 받을 뿐입니다.
+This `fromZod` helper lives in your code, not in the library. Whether to use zod, and how, is your call. The library just takes functions.
 
-zod schema를 백엔드와 공유한다면 이 패턴이 자연스럽습니다 — schema 정의는 공유 모듈에 두고, 프론트에선 그 schema를 `fromZod`로 감싸 validator로 씁니다. 라이브러리가 zod에 묶이지 않으니, 나중에 다른 검증 방식으로 바꿔도 라이브러리 코드는 그대로입니다.
+If you share a zod schema with your backend, this pattern is natural — keep the schema definition in a shared module, and on the front end wrap it with `fromZod` to use as a validator. Since the library isn't tied to zod, you can later switch to a different validation approach without touching the library's code.
 
-### 비동기 검증기
+### Async validators
 
-검증기는 `Promise`를 반환해도 됩니다. 서버 중복 체크 같은 케이스에 사용하세요.
+A validator may return a `Promise`. Use this for cases like server-side duplicate checks.
 
 ```ts
 const validateMap: TValidatorMap<{email: string}> = {
@@ -240,65 +370,343 @@ const validateMap: TValidatorMap<{email: string}> = {
     async (value) => {
       const res = await fetch(`/check-email?value=${encodeURIComponent(value)}`);
       const {ok} = await res.json();
-      return ok ? null : formErrorTempl(true, '이미 등록된 이메일');
+      return ok ? null : formErrorTempl(true, 'Email already registered');
     }
   ]
 };
 ```
 
-- 사용자가 빠르게 타이핑할 때 직전 비동기 검증 결과가 늦게 도착해도 **최신 결과만 반영**됩니다 (필드별 generation 토큰 기반 race 보호).
-- 검증이 진행 중인지는 `isValidating[name]`으로 확인할 수 있습니다.
-- `handleSubmit`은 모든 비동기 검증기가 끝날 때까지 await한 후 결과를 판단합니다.
+- When the user types fast, even if a previous async validation result arrives late, **only the latest result is applied** (per-field generation-token race protection).
+- A field's validator array is awaited **sequentially** — each one waits for the previous to resolve, and the first error short-circuits the rest. So put expensive async checks **last**: a cheaper sync check earlier can fail first and skip the network call entirely.
+- You can check whether validation is in progress via `isValidating[name]`.
+- `handleSubmit` awaits all async validators to finish before deciding the result.
 
-## 체크박스
+### Debouncing an async validator
 
-form-level `onChange`는 `type="checkbox"`인 경우 `e.target.checked`를 자동으로 읽습니다.
-`value`가 아니라 `checked`로 wiring하세요:
+Correctness is already handled — generation tokens discard a stale result, so you never *see* a wrong error. Debounce here is purely to **skip wasted network calls** while the user is still typing. There's nothing for the library to do — it's a plain module utility. Since the only way to feed the form is `onChange` / `setValue` (both validate), the debounce belongs **inside the validator** — that's the one place to hook in:
+
+```ts
+// your helper — a debounce that returns a promise resolving to the latest result
+function debounceAsync<A extends unknown[], R>(fn: (...args: A) => Promise<R>, ms: number) {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  return (...args: A) =>
+    new Promise<R>((resolve, reject) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args).then(resolve, reject), ms);
+    });
+}
+
+const checkEmail = debounceAsync(async (value: string) => {
+  const res = await fetch(`/check-email?value=${encodeURIComponent(value)}`);
+  const {ok} = await res.json();
+  return ok ? null : formErrorTempl(true, 'Email already registered');
+}, 300);
+
+const validateMap: TValidatorMap<{email: string}> = {
+  // regex runs first (sync, instant); the server check only fires when it passes
+  email: [regex(emailPattern, 'Invalid email'), checkEmail]
+};
+```
+
+Keep `checkEmail` at **module scope** (as above). It carries a timer, so it needs a stable identity across renders — defining it inline in a component recreates the timer every render and the debounce never accumulates. If it has to live inside a component (e.g. it depends on props), wrap it in `useMemo`/`useRef`.
+
+Two things to know:
+
+- `isValidating.email` is `true` from the first keystroke through ~300ms after the last one — it covers the debounce wait, not just the request. That's usually what you want for a "checking…" spinner.
+- A superseded debounced call simply never resolves (it's dropped). Harmless for a form; just don't reuse `debounceAsync` for non-form fire-and-forget work where that matters.
+
+## `touched` — when to show errors
+
+`error` says *whether* a field is invalid; `touched` says *when it's okay to show that*. They're separate on purpose.
+
+An `error` can be present from the very first render — an empty email is already "invalid" before the user types anything. You don't want to flash a red error at a field nobody has touched yet. So `touched` tracks whether the user has visited a field, and you gate the message on both:
+
+```tsx
+{touched.email && error.email?.hasError && <small>{error.email.message}</small>}
+//  ↑ visited?       ↑ invalid?
+```
+
+A field becomes `touched` at two moments:
+
+- **`onBlur`** — when focus leaves the field (the user finished with it). Wire `onBlur={onBlur}` to enable this.
+- **`handleSubmit`** — on submit, **every** field is forced touched, so all outstanding errors surface at once even for fields the user never visited.
+
+`onReset` clears it back to `{}` — nothing touched again.
+
+## Reacting after submit — `setErrors` and `onReset`
+
+`onSubmit` receives **three** arguments, not one: `(data, setErrors, onReset)`. Every example above uses only `data`, but the other two are how you react to the *result* of a submit — above all, server-side validation errors.
+
+```tsx
+onSubmit: async (data, setErrors, onReset) => {
+  const res = await fetch('/signup', {method: 'POST', body: JSON.stringify(data)});
+
+  if (res.status === 409) {
+    // put a server error on a specific field — same shape a validator produces
+    setErrors({name: 'email', error: true, message: 'That email is already registered'});
+    return; // stop here; don't reset
+  }
+
+  onReset(); // clear the form after a successful submit
+}
+```
+
+- **`setErrors({name, error, message})`** writes an error onto one field by key. Submit has already forced every field `touched`, so the message shows right away.
+- **`onReset()`** restores the form to its baseline and clears error/touched (the next section explains what "baseline" means).
+- **A thrown `onSubmit` is swallowed.** `handleSubmit` wraps the call in `try/catch` and only `console.error`s — it never rejects. If you need a submit-failure UI, `try/catch` *inside* `onSubmit` yourself.
+
+## The form baseline — dirty, reset, and async `defaultValues`
+
+The hook keeps an internal **baseline**: the values it treats as "the initial state." `isDirty` / `dirtyFields` are computed as *current value vs baseline*, and `onReset` restores *to* the baseline. Three events move that baseline:
+
+| When | What happens to the baseline |
+|---|---|
+| **Mount** | Baseline = a deep clone of `defaultValues`. |
+| **Successful submit** | After `onSubmit` resolves without throwing, the submitted values **become the new baseline**. |
+| **`defaultValues` content changes** | The form **re-initializes** to the new `defaultValues` — value, baseline, error, and touched all reset. |
+
+Two consequences worth knowing:
+
+**After a successful submit, the form is no longer dirty.** The just-submitted values are the new baseline, so `isDirty` flips back to `false` and `dirtyFields` to `{}`. A Save button gated on `disabled={!isDirty}` re-disables itself after a save — usually exactly what you want. (A submit that throws or is blocked does **not** re-baseline.)
+
+**`onReset` restores to the *current* baseline, not necessarily the original `defaultValues`.** Before any submit they're identical; after a submit, `onReset` returns to the submitted values, not the values the form first mounted with.
+
+### Async initial data just works
+
+Because the form re-initializes when `defaultValues` changes, you can render before your data has loaded and let the form populate itself when the data arrives:
+
+```tsx
+const ProfileForm = ({userId}: {userId: string}) => {
+  const {data} = useQuery(['profile', userId], fetchProfile); // arrives later
+
+  const {value, onChange, isDirty, handleSubmit} = useForm<Profile>({
+    defaultValues: data ?? {name: '', bio: ''}, // empty first, real data once loaded
+    onSubmit: async (d) => {
+      await saveProfile(d);
+    }
+  });
+  // when `data` arrives, the form re-initializes to it; isDirty stays false until the user edits
+  // ...
+};
+```
+
+> **The check is deep-equal, so inline literals are safe.** `defaultValues={{name: '', bio: ''}}` is a new object every render, but its *contents* don't change, so nothing resets. Only a real content change re-initializes — and when it does, **any unsaved edits are replaced**. If you need to preserve in-progress edits across a data refresh, keep the incoming data in your own state and apply it with `setValues` instead.
+
+## Checkboxes
+
+The form-level `onChange` automatically reads `e.target.checked` when `type="checkbox"`.
+Wire it with `checked`, not `value`:
 
 ```tsx
 <input type="checkbox" name="agree" checked={value.agree} onChange={onChange} />
 ```
 
+## Other input types — `number`, `select`, `textarea`, `radio`
+
+The form-level `onChange` handles more than text and checkboxes. `number`, `radio`, `select`, and `textarea` all wire the same way — `name` + `value` (or `checked`) + `onChange`. One thing to watch:
+
+**A `number` input still hands you a string.** `e.target.value` is always a string, so the form stores `"42"`, not `42`. If your form type wants a real number, coerce it yourself — for example with a small wrapper around `setValue`:
+
+```tsx
+// stored as the string "42"
+<input type="number" name="age" value={value.age} onChange={onChange} />
+
+// coerced to a real number
+<input
+  type="number"
+  name="age"
+  value={value.age}
+  onChange={(e) => setValue({name: 'age', value: e.target.valueAsNumber})}
+/>
+```
+
+`select` and `textarea` need nothing special:
+
+```tsx
+<select name="country" value={value.country} onChange={onChange}>
+  <option value="kr">Korea</option>
+  <option value="us">United States</option>
+</select>
+
+<textarea name="bio" value={value.bio} onChange={onChange} />
+```
+
+## Programmatic updates — `setValue` and `setValues`
+
+`setValue` and `setValues` write to the form from code instead of a DOM event — and **both run validation**, exactly like `onChange`. Reach for them to fill the form from an API, clear a dependent field, or wire a custom input that doesn't emit a normal change event.
+
+```tsx
+const {value, setValue, setValues} = useForm<Address>({
+  defaultValues: {zip: '', city: '', street: ''},
+  onSubmit: handle
+});
+
+// one field
+setValue({name: 'zip', value: '04524'});
+
+// several at once — autofill from a lookup
+const onZipLookup = async (zip: string) => {
+  const {city, street} = await lookupZip(zip);
+  setValues({city, street});
+};
+```
+
+- `setValue({name, value})` updates and validates a single field.
+- `setValues(partial)` updates and validates several at once. A key whose value is `undefined` is left **unvalidated**, so pass concrete values — to clear a field use `''` / `false`, not `undefined`.
+
+## `excludeKey` — leave fields out of the payload
+
+`excludeKey` drops fields from the `onSubmit` payload **without touching validation** — excluded fields are still validated, just not sent. The classic case is a confirm field:
+
+```tsx
+type SignUp = {email: string; password: string; passwordConfirm: string};
+
+const {handleSubmit} = useForm<SignUp, 'passwordConfirm'>({
+  defaultValues: {email: '', password: '', passwordConfirm: ''},
+  excludeKey: ['passwordConfirm'], // validated, but never in the payload
+  validateMap,
+  onSubmit: async (data) => {
+    // data: {email, password} — passwordConfirm is gone, at the type level too
+    await fetch('/signup', {method: 'POST', body: JSON.stringify(data)});
+  }
+});
+```
+
+The excluded key is stripped from `data`'s type (`Omit<T, K>`), so `data.passwordConfirm` is a compile error — the payload's shape matches exactly what you send.
+
 ## API
 
 ### `useForm<T>(options)`
 
-`FormApi<T>`를 반환:
+Returns `FormApi<T>`:
 
-- `value: T` — 현재 form 데이터
-- `error: {[K in keyof T]?: TValidationResult}` — 필드별 에러
-- `touched: {[K in keyof T]?: boolean}` — 필드별 touched 플래그
-- `isValidating: {[K in keyof T]?: boolean}` — 필드별 검증 진행 중 플래그 (async)
-- `setValue({name, value})` / `setValues(partial)` — 프로그래밍 방식 갱신
-- `setErrors({name, error, message})` — 수동 에러 세팅
-- `onChange(e)` — `<input onChange>`에 wire. `e.target.name`과 `e.target.value`/`e.target.checked`를 읽음
-- `onBlur(e)` — `<input onBlur>`에 wire. 해당 필드를 touched 처리
-- `onReset()` — `defaultValues`로 복원, error/touched/isValidating 모두 초기화
-- `handleSubmit(e)` — 모든 검증기 실행(비동기 포함 await) → 통과 시 `onSubmit` 호출
+- `value: T` — the current form data
+- `error: {[K in keyof T]?: TValidationResult}` — per-field error
+- `touched: {[K in keyof T]?: boolean}` — per-field touched flag
+- `isValidating: {[K in keyof T]?: boolean}` — per-field validation-in-progress flag (async)
+- `dirtyFields: {[K in keyof T]?: boolean}` — only the fields that differ from `defaultValues` are present (and `true`); unchanged keys are omitted. Same idea as react-hook-form's `dirtyFields`
+- `isDirty: boolean` — whether the form currently differs from `defaultValues` (deep-equal). Same as react-hook-form's `formState.isDirty`
+- `setValue({name, value})` / `setValues(partial)` — programmatic updates
+- `setErrors({name, error, message})` — manual error setting
+- `onChange(e)` — wire to `<input onChange>`. Reads `e.target.name` and `e.target.value`/`e.target.checked`
+- `onBlur(e)` — wire to `<input onBlur>`. Marks the field as touched
+- `onReset()` — restores the current **baseline** (initially `defaultValues`; the submitted values after a successful submit — see [The form baseline](#the-form-baseline--dirty-reset-and-async-defaultvalues)) and clears error/touched/isValidating
+- `handleSubmit(e?)` — runs all validators (awaiting async ones) → calls `onSubmit` on pass. The event is **optional**: pass a `<form>` submit event, a button click event, or nothing at all (it's only used for `e?.preventDefault()`), so it works with or without a `<form>` tag
 
 Options:
 
-- `defaultValues: T` (필수)
-- `onSubmit: (data, setErrors, onReset) => Promise<void>` (필수)
+- `defaultValues: T` (required)
+- `onSubmit: (data, setErrors, onReset) => Promise<void>` (required) — the 2nd/3rd args handle server errors and reset-on-success ([details](#reacting-after-submit--seterrors-and-onreset))
 - `validateMap?: TValidatorMap<T>`
-- `excludeKey?: (keyof T)[]` — submit payload에서 제외할 키 (단, 검증은 진행됨)
-- `isDirty?: (v: boolean) => void` — initial과 deep-equal하지 않으면 호출됨
+- `excludeKey?: (keyof T)[]` — keys to exclude from the submit payload (validation still runs)
+- `submitOnlyWhenDirty?: boolean` (default `false`) — when `true`, `handleSubmit` skips `onSubmit` if nothing changed. Default is to always submit
+- `onlyDirtyFields?: boolean` (default `false`) — when `true`, the `onSubmit` payload contains only the changed fields, and its `data` argument is typed `Partial<…>`. Validation still runs on every field
+
+### Dirty tracking — `isDirty`, `dirtyFields`, `submitOnlyWhenDirty`, `onlyDirtyFields`
+
+Four separate pieces, deliberately not bundled together:
+
+| API | Kind | Answers |
+|---|---|---|
+| `isDirty` | returned `boolean` | "did anything change from the initial values?" |
+| `dirtyFields` | returned value | "*which* fields changed?" (`{[key]?: true}`) |
+| `submitOnlyWhenDirty` | option flag | "skip submit entirely when nothing changed?" |
+| `onlyDirtyFields` | option flag | "put only the changed fields in the `onSubmit` payload?" |
+
+**`isDirty` — toggle a Save button.** It's a value you read off the hook (like react-hook-form's `formState.isDirty`), not a callback. No wiring, no memoization headaches.
+
+```tsx
+const ProfileForm = ({initial}: {initial: Profile}) => {
+  const {value, onChange, isDirty, handleSubmit} = useForm<Profile>({
+    defaultValues: initial,
+    onSubmit: async (data) => {
+      await fetch('/profile', {method: 'PUT', body: JSON.stringify(data)});
+    }
+  });
+
+  return (
+    <form onSubmit={handleSubmit} noValidate>
+      <input name="name" value={value.name} onChange={onChange} />
+      <textarea name="bio" value={value.bio} onChange={onChange} />
+      {/* disabled until something actually changes */}
+      <button type="submit" disabled={!isDirty}>
+        Save
+      </button>
+    </form>
+  );
+};
+```
+
+**`submitOnlyWhenDirty` — make submit a no-op when unchanged.** With it `true`, `handleSubmit` returns early and `onSubmit` never runs if the form still equals its initial values.
+
+```tsx
+const SettingsForm = ({initial}: {initial: Settings}) => {
+  const {value, onChange, handleSubmit} = useForm<Settings>({
+    defaultValues: initial,
+    submitOnlyWhenDirty: true,
+    onSubmit: async (data) => {
+      await saveSettings(data);
+    }
+  });
+
+  return (
+    <form onSubmit={handleSubmit} noValidate>
+      <input name="theme" value={value.theme} onChange={onChange} />
+      <button type="submit">Apply</button>
+    </form>
+  );
+};
+```
+
+**`onlyDirtyFields` — send only the changed fields (PATCH), automatically.** Turn it on and the `onSubmit` payload holds only the keys that changed. Because unchanged keys are gone, `data` is typed `Partial<…>` (the `true` flips it — that's why there are no explicit generics below: let `data` infer).
+
+```tsx
+const AccountForm = ({initial}: {initial: Account}) => {
+  const {value, onChange, handleSubmit} = useForm({
+    defaultValues: initial,
+    onlyDirtyFields: true,
+    onSubmit: async (data) => {
+      // data: Partial<Account> — only the changed keys
+      await fetch('/account', {method: 'PATCH', body: JSON.stringify(data)});
+    }
+  });
+
+  return (
+    <form onSubmit={handleSubmit} noValidate>
+      <input name="email" value={value.email} onChange={onChange} />
+      <input name="phone" value={value.phone} onChange={onChange} />
+      <button type="submit">Update</button>
+    </form>
+  );
+};
+```
+
+**Prefer to filter it yourself?** Leave `onlyDirtyFields` off and build the payload by hand from `dirtyFields` — same result, fully explicit, the library trims nothing:
+
+```tsx
+onSubmit: async (data) => {
+  const changed = Object.fromEntries(
+    Object.entries(data).filter(([k]) => dirtyFields[k as keyof Account])
+  );
+  await fetch('/account', {method: 'PATCH', body: JSON.stringify(changed)});
+}
+```
 
 ### `<FormProvider>`
 
-`useForm`과 동일한 옵션을 받고, children으로 render-prop 함수 **또는** 일반 `ReactNode`를 허용. 안쪽을 `<form onSubmit={handleSubmit} noValidate>`로 감싸고 Context Provider도 함께 제공합니다.
+Takes the same options as `useForm` and accepts either a render-prop function **or** a plain `ReactNode` as children. It wraps the inside in `<form onSubmit={handleSubmit} noValidate>` and provides the Context Provider as well.
 
 ### `useFormContext<T>()`
 
-`FormApi<T>`를 반환. `FormProvider` 바깥에서 호출하면 throw합니다.
+Returns `FormApi<T>`. Throws if called outside `FormProvider`.
 
-## 개발 / 빌드 / 테스트
+## Develop / build / test
 
 ```bash
-npm run dev        # examples/basic 페이지 (localhost:5173)
-npm run build      # 라이브러리 빌드 → dist/
+npm run dev        # examples/basic page (localhost:5173)
+npm run build      # build the library → dist/
 npm test           # vitest run
-npm run typecheck  # tsc --noEmit
+npm run typecheck  # tsc -b
 ```
 
 ## License
