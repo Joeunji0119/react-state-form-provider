@@ -1,6 +1,6 @@
 {
   "name": "react-state-form-provider",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "State-based React form library — no refs, no register pattern, no schema-lib coupling.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -16,6 +16,7 @@
   "files": [
     "dist",
     "README.md",
+    "README.ko.md",
     "LICENSE"
   ],
   "scripts": {
@@ -36,6 +37,9 @@
     "form-provider"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "peerDependencies": {
     "react": ">=18",
     "react-dom": ">=18"
