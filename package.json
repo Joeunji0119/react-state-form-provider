@@ -1,6 +1,6 @@
 {
   "name": "react-state-form-provider",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "State-based React form library — no refs, no register pattern, no schema-lib coupling.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -37,6 +37,14 @@
     "form-provider"
   ],
   "license": "MIT",
+  "homepage": "https://react-state-form-provider-docs.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Joeunji0119/react-state-form-provider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Joeunji0119/react-state-form-provider/issues"
+  },
   "engines": {
     "node": ">=18"
   },
