@@ -2,7 +2,7 @@
 
 상태(state) 기반의 React form 라이브러리입니다. ref 없음, `register()` 패턴 없음, 외부 스키마 라이브러리 결합 없음.
 
-> 📖 **문서 & 라이브 데모:** https://formtest-dusky.vercel.app
+> 📖 **문서 & 라이브 데모:** https://react-state-form-provider-docs.vercel.app
 
 ## 왜 만들었나?
 

@@ -2,7 +2,7 @@
 
 A state-based React form library. No refs, no `register()` pattern, no coupling to external schema libraries.
 
-> 📖 **Docs & live demo:** https://formtest-dusky.vercel.app
+> 📖 **Docs & live demo:** https://react-state-form-provider-docs.vercel.app
 >
 > 한국어 문서는 [README.ko.md](README.ko.md)를 참고하세요.
 
