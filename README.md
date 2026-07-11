@@ -21,17 +21,13 @@ npm install react-state-form-provider
 
 ## Why build this?
 
-I built it because I dislike [react-hook-form](https://react-hook-form.com/).
+React's strength is that the UI and the data stay in sync. A library that reads values straight from the DOM through refs throws that strength away.
 
-**It's React — so why refs?** Keeping the UI and the data in sync is React's greatest strength. Pulling values straight out of the DOM via refs breaks that sync. I know there are cases where refs are unavoidable for performance — I just didn't like reaching for a ref-based library every time I needed to build **one simple form**.
+For a simple form you don't really need a library — handling a few inputs directly with state is often the simpler choice, especially compared to a ref-based library (react-hook-form's default approach).
 
-Other things that bugged me:
+Worried about re-renders? A form with a handful of fields is perfectly fine re-rendering on every keystroke. It won't fall over. Re-render optimization is something you need for large forms with dozens or hundreds of fields — and you can worry about it when you actually get there.
 
-- **The `register()` pattern.** Spreading a bundle of magic props onto an input hides what's actually wired up. JSX being explicit isn't a downside — it's the point.
-- **Coupling to external schema libraries like zod / yup.** zod itself isn't bad — it's a good tool. What I disliked was react-hook-form building **a dedicated "drop your zod schema here" entry point into its API**, like `resolver: zodResolver(schema)`. Do that and the library gets tied to a schema library, and so does everyone using it. This library doesn't know about zod — validation is just functions. If you want zod, call it yourself inside a validator function.
-- **The habit of using Context to dodge prop drilling.** I think child components should be passed values explicitly via props. This library does provide `useFormContext`, but it isn't recommended.
-
-> **Honestly, I think forms are something you're better off implementing yourself rather than depending on a library.** It's a bit odd to say that after building a library. But this library isn't "use this instead of react-hook-form" — it's closer to "a write-up of how I deal with forms." Form logic differs subtly from app to app, so what you can control yourself is ultimately the best option.
+So this library isn't saying "use this." It's saying: build the simple things yourself, without a library, and reach for state instead of refs. This documentation is a write-up, in code, of how to do that.
 
 ---
 
